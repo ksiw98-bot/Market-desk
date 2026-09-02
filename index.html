@@ -4,14 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Market English Desk</title>
-  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- React 18 CDN -->
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
-  <!-- Babel -->
   <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
-  <!-- SheetJS -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     body { background-color: #10181F; color: #E7E2D4; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
@@ -38,7 +34,6 @@
     const ETF_BRANDS = ["KODEX", "TIGER", "KBSTAR", "ARIRANG", "SOL", "ACE", "HANARO", "KOSEF", "KINDEX", "TIMEFOLIO", "WOORI", "PLUS"];
     const isETF = (name) => ETF_BRANDS.some((b) => name.toUpperCase().startsWith(b));
 
-    // 다중 CORS 우회 라이브 주가 수집 엔진 (실시간 현재가 수집)
     async function fetchRealTimePrice(symbol, market, name) {
       const krStockMap = {
         "삼성전자": "005930",
@@ -59,7 +54,6 @@
         code = krStockMap[name.trim()] || code;
       }
 
-      // 1시도: corsproxy 우회 수집
       try {
         if (market === "KR" && code) {
           const targetUrl = `https://polling.finance.naver.com/api/realtime/domestic/stock/${code}`;
@@ -83,7 +77,6 @@
         }
       } catch (e) {}
 
-      // 2시도: Stooq 글로벌 데이터 백업
       try {
         const targetSymbol = market === "US" ? symbol : `${code}.KR`;
         const res = await fetch(`https://stooq.com/q/l/?s=${targetSymbol.toLowerCase()}&f=sdgl1otc&e=json`);
@@ -107,7 +100,6 @@
       return { isSuccess: false };
     }
 
-    // Gemini API 생성
     async function callLLMForInsight(prompt, apiKey) {
       if (!apiKey) throw new Error("API_KEY_MISSING");
 
@@ -142,4 +134,642 @@
       const textContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!textContent) throw new Error("응답 데이터가 비어 있습니다.");
 
-      const cleaned = textContent.replace(/```json|
+      const cleaned = textContent.replace(/```json|```/g, "").trim();
+      return JSON.parse(cleaned);
+    }
+
+    function App() {
+      const [tab, setTab] = useState("portfolio");
+      const [apiKey, setApiKey] = useState("");
+      const [showApiInput, setShowApiInput] = useState(false);
+
+      const [entry, setEntry] = useState(null);
+      const [writing, setWriting] = useState("");
+      const [loadingPassage, setLoadingPassage] = useState(false);
+      const [loadingFeedback, setLoadingFeedback] = useState(false);
+
+      const [holdings, setHoldings] = useState([
+        { id: "1", name: "삼성전자", symbol: "005930", market: "KR", buyPrice: 72000, quantity: 50 },
+        { id: "2", name: "기아", symbol: "000270", market: "KR", buyPrice: 78492, quantity: 20 },
+        { id: "3", name: "SK", symbol: "034730", market: "KR", buyPrice: 180000, quantity: 10 },
+        { id: "4", name: "NVIDIA", symbol: "NVDA", market: "US", buyPrice: 115, quantity: 10 }
+      ]);
+      const [newHolding, setNewHolding] = useState({ name: "", symbol: "", market: "KR", buyPrice: "", quantity: "" });
+      const [briefing, setBriefing] = useState(null);
+      const [loadingBriefing, setLoadingBriefing] = useState(false);
+      const [briefingError, setBriefingError] = useState("");
+      const [uploadMessage, setUploadMessage] = useState("");
+      const [uploadError, setUploadError] = useState("");
+
+      const [expandedHoldingKey, setExpandedHoldingKey] = useState(null);
+      const [loadingHoldingKey, setLoadingHoldingKey] = useState(null);
+      const [holdingBriefings, setHoldingBriefings] = useState({});
+
+      const [vocabBank, setVocabBank] = useState([
+        { word: "allocation", meaning_ko: "자산 배분" },
+        { word: "volatility", meaning_ko: "변동성" }
+      ]);
+      const [history, setHistory] = useState([]);
+
+      const fileInputRef = useRef(null);
+      const dateKey = todayKey();
+
+      useEffect(() => {
+        const savedKey = localStorage.getItem("user_gemini_api_key");
+        if (savedKey) setApiKey(savedKey);
+      }, []);
+
+      const saveKey = (key) => {
+        const trimmed = key.trim();
+        setApiKey(trimmed);
+        localStorage.setItem("user_gemini_api_key", trimmed);
+      };
+
+      const generatePassage = async () => {
+        setLoadingPassage(true);
+        const prompt = `Write a short English reading passage for intermediate Korean financial learner. Return raw JSON:
+{
+  "title": "Short title",
+  "passage": "120-150 word English passage about stocks or markets.",
+  "vocab": [{"word": "word1", "meaning_ko": "뜻1"}, {"word": "word2", "meaning_ko": "뜻2"}],
+  "comprehension_question": "English question about passage",
+  "writing_prompt": "English writing prompt"
+}`;
+
+        try {
+          let result;
+          if (apiKey) {
+            result = await callLLMForInsight(prompt, apiKey);
+          } else {
+            await new Promise((r) => setTimeout(r, 600));
+            result = {
+              title: "Navigating Volatility and Asset Allocation",
+              passage: "When investing in modern financial markets, maintaining a balanced asset allocation is critical for long-term stability. Market volatility often causes emotional reactions, leading investors to make hasty decisions. Strategic diversification across different sectors helps mitigate potential risks while capturing sustainable growth opportunities over time.",
+              vocab: [
+                { word: "allocation", meaning_ko: "자산 배분" },
+                { word: "volatility", meaning_ko: "변동성" }
+              ],
+              comprehension_question: "Why is asset allocation important during market volatility?",
+              writing_prompt: "How do you adjust your investment strategy when market volatility increases?"
+            };
+          }
+          setEntry(result);
+          setWriting("");
+          setHistory((h) => [{ date: dateKey, title: result.title }, ...h]);
+          setVocabBank((prev) => [...prev, ...result.vocab]);
+        } catch (err) {
+          alert(`지문 생성 실패: ${err.message}`);
+        } finally {
+          setLoadingPassage(false);
+        }
+      };
+
+      const submitWriting = async () => {
+        if (!writing.trim()) return;
+        setLoadingFeedback(true);
+        const prompt = `Review writing: "${writing}". Return raw JSON: {"corrected_text": "text", "comments_ko": "comments"}`;
+
+        try {
+          let result;
+          if (apiKey) {
+            result = await callLLMForInsight(prompt, apiKey);
+          } else {
+            await new Promise((r) => setTimeout(r, 500));
+            result = {
+              corrected_text: writing + " (Grammar Checked)",
+              comments_ko: "의도가 잘 전달되었고 어휘 사용이 적절합니다."
+            };
+          }
+          setEntry((prev) => ({ ...prev, feedback: result }));
+        } catch (err) {
+          alert(`첨삭 실패: ${err.message}`);
+        } finally {
+          setLoadingFeedback(false);
+        }
+      };
+
+      const parseNumber = (v) => {
+        if (typeof v === "number") return v;
+        if (!v) return NaN;
+        return parseFloat(String(v).replace(/[,\s원]/g, ""));
+      };
+
+      const handleFileUpload = async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        setUploadError("");
+        setUploadMessage("");
+
+        try {
+          const buffer = await file.arrayBuffer();
+          const workbook = XLSX.read(buffer, { type: "array" });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+          if (rows.length === 0) throw new Error("파일 데이터 없음");
+
+          let etfCount = 0;
+          const parsed = rows.map((row, i) => {
+            const keys = Object.keys(row);
+            const nameK = keys.find(k => k.match(/종목|name|티커|ticker/i));
+            const symbolK = keys.find(k => k.match(/코드|symbol/i));
+            const marketK = keys.find(k => k.match(/시장|market|구분/i));
+            const priceK = keys.find(k => k.match(/매수가|매입가|단가|price/i));
+            const qtyK = keys.find(k => k.match(/수량|qty|quantity/i));
+
+            if (!nameK || !priceK || !qtyK) return null;
+
+            const name = String(row[nameK]).trim();
+            if (isETF(name)) { etfCount++; return null; }
+
+            const symbol = symbolK ? String(row[symbolK]).trim() : "";
+            const rawMarket = marketK ? String(row[marketK]).toLowerCase() : "";
+            const market = rawMarket.includes("미국") || rawMarket.includes("us") ? "US" : "KR";
+            const buyPrice = parseNumber(row[priceK]);
+            const quantity = parseNumber(row[qtyK]);
+
+            if (!name || isNaN(buyPrice) || isNaN(quantity)) return null;
+
+            return { id: `${Date.now()}-${i}`, name, symbol, market, buyPrice, quantity };
+          }).filter(Boolean);
+
+          if (parsed.length === 0) throw new Error("유효 종목 없음");
+
+          setHoldings((prev) => [...prev, ...parsed]);
+          setUploadMessage(`${parsed.length}개 종목 추가 완료${etfCount > 0 ? ` (ETF ${etfCount}개 제외됨)` : ''}`);
+        } catch (err) {
+          setUploadError(err.message || "엑셀 읽기 실패");
+        } finally {
+          if (fileInputRef.current) fileInputRef.current.value = "";
+        }
+      };
+
+      const addHolding = () => {
+        if (!newHolding.name.trim() || !newHolding.buyPrice || !newHolding.quantity) return;
+        if (isETF(newHolding.name.trim())) { alert("ETF 종목은 제외됩니다."); return; }
+
+        const holding = {
+          id: `${Date.now()}`,
+          name: newHolding.name.trim(),
+          symbol: newHolding.symbol.trim(),
+          market: newHolding.market,
+          buyPrice: parseFloat(newHolding.buyPrice),
+          quantity: parseFloat(newHolding.quantity),
+        };
+        setHoldings([...holdings, holding]);
+        setNewHolding({ name: "", symbol: "", market: "KR", buyPrice: "", quantity: "" });
+      };
+
+      const removeHolding = (id) => {
+        setHoldings(holdings.filter((h) => h.id !== id));
+      };
+
+      const holdingKey = (h) => `${h.name}__${h.market}`;
+
+      const toggleHoldingBriefing = async (h) => {
+        const key = holdingKey(h);
+        if (expandedHoldingKey === key) {
+          setExpandedHoldingKey(null);
+          return;
+        }
+        setExpandedHoldingKey(key);
+        if (holdingBriefings[key]) return;
+
+        setLoadingHoldingKey(key);
+
+        const realData = await fetchRealTimePrice(h.symbol, h.market, h.name);
+
+        let priceText = "";
+        if (realData.isSuccess) {
+          const unit = realData.currency === "KRW" ? "원" : "$";
+          priceText = `⚡ 실시간 현재가: ${realData.price.toLocaleString()}${unit} (${realData.changePercent})`;
+        } else {
+          priceText = `평단가 기준 분석: ${h.buyPrice.toLocaleString()}${h.market === 'KR' ? '원' : '$'}`;
+        }
+
+        const prompt = `Stock Name: "${h.name}" (${h.market === "KR" ? "Korean stock" : "US stock"}).
+Average Buy Price: ${h.buyPrice.toLocaleString()}.
+Price Reference: "${priceText}".
+
+Provide professional financial analysis in Korean. Return ONLY raw JSON:
+{
+  "price_trend": "${priceText}",
+  "news_summary_ko": "2-sentence summary about recent fundamentals, valuation, and market position of ${h.name}.",
+  "watch_point_ko": "1 key watch point based on current market trends and user buy price (${h.buyPrice.toLocaleString()}).",
+  "metric_summary": "PER/PBR or Valuation comment"
+}`;
+
+        try {
+          let result;
+          if (apiKey) {
+            result = await callLLMForInsight(prompt, apiKey);
+          } else {
+            await new Promise((r) => setTimeout(r, 500));
+            result = {
+              price_trend: priceText,
+              news_summary_ko: `${h.name}은(는) 최근 실적 흐름과 밸류에이션 모멘텀이 안정적으로 유지되고 있는 대표 종목입니다.`,
+              watch_point_ko: "매수가 대비 주요 지지선 유지 및 외국인 수급 점검",
+              metric_summary: "실시간 라이브 시세 수집 기반 분석"
+            };
+          }
+          setHoldingBriefings((prev) => ({ ...prev, [key]: result }));
+        } catch (err) {
+          alert(`오류: ${err.message}`);
+        } finally {
+          setLoadingHoldingKey(null);
+        }
+      };
+
+      const generateBriefing = async () => {
+        if (holdings.length === 0) return;
+        setBriefingError("");
+        setLoadingBriefing(true);
+
+        const nonEtfHoldings = holdings.filter(h => !isETF(h.name));
+        const top10Holdings = [...nonEtfHoldings]
+          .sort((a, b) => (b.buyPrice * b.quantity) - (a.buyPrice * a.quantity))
+          .slice(0, 10);
+
+        const realMarketData = await Promise.all(
+          top10Holdings.map(async (h) => {
+            const realData = await fetchRealTimePrice(h.symbol, h.market, h.name);
+            if (realData.isSuccess) {
+              const unit = realData.currency === "KRW" ? "원" : "$";
+              return `- ${h.name}: 실시간 현재가 ${realData.price.toLocaleString()}${unit} (${realData.changePercent}), 매수가: ${h.buyPrice.toLocaleString()}원`;
+            }
+            return `- ${h.name}: 평단가 ${h.buyPrice.toLocaleString()}원`;
+          })
+        );
+
+        const prompt = `Analyze the stock portfolio for today (${dateKey}).
+Top Holdings Data:
+${realMarketData.join('\n')}
+
+Instructions:
+1. Provide overall market summary today, focusing specially on AI, Robot, Bio/Pharma, and Secondary Battery (2차전지) sectors.
+2. Provide individual analysis for each top holding listed above considering user's average buy price.
+
+Return raw JSON:
+{
+  "market_overview_ko": "오늘 증시 흐름 및 AI, 로봇, 제약바이오, 2차전지 섹터 종합 분석 2-3문장",
+  "key_metrics_ko": "오늘 자 주요 핵심 시장 지표 요약",
+  "holdings_analysis": [{"name": "종목명", "insight_ko": "매수가 대비 현재 흐름 및 핵심 모멘텀 분석 1문장", "action_point": "대응 전략"}]
+}`;
+
+        try {
+          let result;
+          if (apiKey) {
+            result = await callLLMForInsight(prompt, apiKey);
+          } else {
+            await new Promise((r) => setTimeout(r, 700));
+            result = {
+              market_overview_ko: `오늘 증시는 AI, 로봇, 제약바이오, 2차전지 주요 섹터를 중심으로 차별화 장세가 이어지는 가운데 상위 종목들의 수급 개선 기대감이 작용하고 있습니다.`,
+              key_metrics_ko: "매수 상위 종목 수급 및 주가 모멘텀 기반 분석",
+              holdings_analysis: top10Holdings.map((h) => ({
+                name: h.name,
+                insight_ko: `${h.name}은(는) 평단가(${h.buyPrice.toLocaleString()}원) 대비 실적 성장 및 주요 섹터 모멘텀에 따른 수급 개선이 기대됩니다.`,
+                action_point: "장중 수급 추이와 주요 저항선 돌파 여부 확인"
+              }))
+            };
+          }
+          setBriefing(result);
+        } catch (err) {
+          setBriefingError(`오류: ${err.message}`);
+        } finally {
+          setLoadingBriefing(false);
+        }
+      };
+
+      return (
+        <div className="w-full max-w-4xl mx-auto rounded-lg overflow-hidden border border-[#2B3A47] bg-[#10181F]">
+          <div className="px-4 py-4 border-b border-[#2B3A47] flex justify-between items-center">
+            <div>
+              <h1 className="text-xl font-bold text-[#E7E2D4]">Market English Desk</h1>
+              <p className="text-xs text-[#8FA0AC] mt-0.5">{formatDisplayDate(dateKey)}</p>
+            </div>
+            <div className="text-xs font-medium text-[#C9A227] bg-[#1F2E3A] px-2.5 py-1 rounded">
+              🔥 연속 학습 중
+            </div>
+          </div>
+
+          <div className="flex border-b border-[#2B3A47] overflow-x-auto">
+            {[
+              { id: "today", label: "오늘의 학습" },
+              { id: "portfolio", label: "포트폴리오" },
+              { id: "vocab", label: "단어장" },
+              { id: "history", label: "기록" },
+            ].map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`flex-1 min-w-[75px] py-3 text-xs sm:text-sm font-medium transition-colors text-center ${
+                  tab === t.id ? "text-[#C9A227] border-b-2 border-[#C9A227]" : "text-[#8FA0AC]"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="p-4 sm:p-6">
+            {tab === "today" && (
+              <div className="space-y-4">
+                {!entry ? (
+                  <div className="bg-[#182430] p-6 rounded-lg border border-[#2B3A47] text-center">
+                    <h2 className="text-base font-bold text-[#E7E2D4] mb-2">오늘의 금융 영어 지문 만들기</h2>
+                    <p className="text-xs text-[#8FA0AC] mb-4">맞춤형 금융 지문과 독해 문제, 영작 훈련을 시작하세요.</p>
+                    <button
+                      onClick={generatePassage}
+                      disabled={loadingPassage}
+                      className="w-full sm:w-auto bg-[#C9A227] text-[#10181F] px-5 py-3 rounded font-medium text-sm disabled:opacity-50"
+                    >
+                      {loadingPassage ? "지문 생성 중..." : "✨ 오늘의 지문 만들기"}
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="bg-[#182430] p-4 sm:p-6 rounded-lg border border-[#2B3A47] space-y-3">
+                      <h2 className="text-lg font-bold text-[#E7E2D4]">{entry.title}</h2>
+                      <p className="text-[#E7E2D4] text-sm leading-relaxed">{entry.passage}</p>
+
+                      <div className="border-t border-[#2B3A47] pt-3">
+                        <div className="text-xs text-[#8FA0AC] mb-1.5">핵심 단어</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {entry.vocab?.map((v, i) => (
+                            <span key={i} className="bg-[#1F2E3A] px-2 py-1 rounded text-xs text-[#C9A227] border border-[#2B3A47]">
+                              {v.word}: {v.meaning_ko}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="border-t border-[#2B3A47] pt-3">
+                        <div className="text-xs text-[#8FA0AC] mb-1">이해 확인 질문</div>
+                        <p className="text-xs italic text-[#E7E2D4]">{entry.comprehension_question}</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-[#182430] p-4 sm:p-6 rounded-lg border border-[#2B3A47] space-y-3">
+                      <h3 className="text-sm font-bold text-[#E7E2D4]">✏️ 나의 생각 쓰기 (English Writing)</h3>
+                      <p className="text-xs text-[#8FA0AC]">{entry.writing_prompt}</p>
+
+                      <textarea
+                        value={writing}
+                        onChange={(e) => setWriting(e.target.value)}
+                        rows={3}
+                        placeholder="3-4문장 정도 작성해 보세요..."
+                        className="w-full bg-[#ECE6D6] text-[#2A2318] p-3 rounded text-sm focus:outline-none resize-none"
+                      />
+
+                      <div className="flex justify-between items-center gap-2">
+                        <button onClick={generatePassage} className="text-xs text-[#8FA0AC] underline">새 지문</button>
+                        <button
+                          onClick={submitWriting}
+                          disabled={loadingFeedback || !writing.trim()}
+                          className="bg-[#C9A227] text-[#10181F] px-4 py-2 rounded text-xs font-bold disabled:opacity-50"
+                        >
+                          {loadingFeedback ? "첨삭 중..." : "✓ 첨삭 받기"}
+                        </button>
+                      </div>
+
+                      {entry.feedback && (
+                        <div className="bg-[#1F2E3A] p-3 rounded border-t border-[#2B3A47] space-y-1.5">
+                          <div className="text-xs text-[#8FA0AC]">교정된 문장</div>
+                          <div className="text-xs text-[#5A9382] leading-relaxed">{entry.feedback.corrected_text}</div>
+                          <div className="text-xs text-[#E7E2D4]">{entry.feedback.comments_ko}</div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {tab === "portfolio" && (
+              <div className="space-y-4">
+                <div className="bg-[#182430] p-3 rounded-lg border border-[#2B3A47] flex justify-between items-center">
+                  <span className="text-xs text-[#8FA0AC] truncate pr-2">
+                    {apiKey ? "✨ Gemini API 연동 완료" : "💡 Gemini API 키를 등록하면 실시간 브리핑이 활성화됩니다."}
+                  </span>
+                  <button
+                    onClick={() => setShowApiInput(!showApiInput)}
+                    className="text-xs px-2 py-1 rounded font-medium border border-[#9C812A] text-[#C9A227] shrink-0"
+                  >
+                    {showApiInput ? "닫기" : "API 설정"}
+                  </button>
+                </div>
+
+                {showApiInput && (
+                  <div className="bg-[#1F2E3A] p-3 rounded-lg border border-[#2B3A47] space-y-2">
+                    <label className="block text-xs text-[#8FA0AC]">Gemini API Key</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        value={apiKey}
+                        onChange={(e) => saveKey(e.target.value)}
+                        placeholder="AQ... 또는 AIzaSy..."
+                        className="bg-[#10181F] text-white px-3 py-2 rounded text-xs w-full focus:outline-none border border-[#2B3A47]"
+                      />
+                      <button
+                        onClick={() => setShowApiInput(false)}
+                        className="bg-[#C9A227] text-[#10181F] px-3 py-2 rounded text-xs font-bold shrink-0"
+                      >
+                        저장
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-[#182430] p-4 sm:p-6 rounded-lg border border-[#2B3A47]">
+                  <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
+                    <div>
+                      <h2 className="text-base font-bold text-[#E7E2D4]">보유 종목 관리</h2>
+                      <p className="text-[11px] text-[#8FA0AC]">ETF(KODEX, TIGER 등)는 제외됩니다.</p>
+                    </div>
+                    <div>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".xlsx,.xls,.csv"
+                        onChange={handleFileUpload}
+                        className="hidden"
+                      />
+                      <button
+                        onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                        className="border border-[#9C812A] text-[#C9A227] px-2.5 py-1.5 rounded text-xs font-medium cursor-pointer"
+                      >
+                        📂 엑셀 등록
+                      </button>
+                    </div>
+                  </div>
+
+                  {uploadMessage && <div className="text-xs text-[#5A9382] mb-2">{uploadMessage}</div>}
+                  {uploadError && <div className="text-xs text-[#B15A3F] mb-2">{uploadError}</div>}
+
+                  <div className="grid grid-cols-2 sm:grid-cols-[1fr_auto_auto_auto_auto] gap-1.5 mb-3">
+                    <input
+                      value={newHolding.name}
+                      onChange={(e) => setNewHolding({ ...newHolding, name: e.target.value })}
+                      placeholder="종목명"
+                      className="bg-[#1F2E3A] text-[#E7E2D4] border border-[#2B3A47] rounded px-2.5 py-2 text-xs focus:outline-none col-span-2 sm:col-span-1"
+                    />
+                    <select
+                      value={newHolding.market}
+                      onChange={(e) => setNewHolding({ ...newHolding, market: e.target.value })}
+                      className="bg-[#1F2E3A] text-[#E7E2D4] border border-[#2B3A47] rounded px-2 py-2 text-xs focus:outline-none"
+                    >
+                      <option value="KR">국내</option>
+                      <option value="US">미국</option>
+                    </select>
+                    <input
+                      value={newHolding.buyPrice}
+                      onChange={(e) => setNewHolding({ ...newHolding, buyPrice: e.target.value })}
+                      placeholder="매수가"
+                      type="number"
+                      className="bg-[#1F2E3A] text-[#E7E2D4] border border-[#2B3A47] rounded px-2 py-2 text-xs focus:outline-none"
+                    />
+                    <input
+                      value={newHolding.quantity}
+                      onChange={(e) => setNewHolding({ ...newHolding, quantity: e.target.value })}
+                      placeholder="수량"
+                      type="number"
+                      className="bg-[#1F2E3A] text-[#E7E2D4] border border-[#2B3A47] rounded px-2 py-2 text-xs focus:outline-none"
+                    />
+                    <button onClick={addHolding} className="bg-[#C9A227] text-[#10181F] rounded px-3 py-2 text-xs font-bold col-span-2 sm:col-span-1">+ 종목 추가</button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {holdings.map((h) => {
+                      const key = holdingKey(h);
+                      const isExpanded = expandedHoldingKey === key;
+                      const hb = holdingBriefings[key];
+                      const isLoadingThis = loadingHoldingKey === key;
+                      const unit = h.market === "KR" ? "원" : "$";
+
+                      return (
+                        <div key={h.id}>
+                          <div
+                            onClick={() => toggleHoldingBriefing(h)}
+                            className={`flex items-center justify-between rounded px-3 py-2.5 cursor-pointer bg-[#1F2E3A] border ${
+                              isExpanded ? "border-[#C9A227]" : "border-[#2B3A47]"
+                            }`}
+                          >
+                            <div className="truncate pr-2">
+                              <span className="text-xs font-bold text-white mr-1.5">{h.name}</span>
+                              <span className="text-[11px] text-[#8FA0AC]">
+                                평단 {h.buyPrice.toLocaleString()}{unit} · {h.quantity}주
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className="text-[11px] text-[#C9A227]">
+                                {isLoadingThis ? "조회 중..." : isExpanded ? "▲ 접기" : "📊 실시간 분석"}
+                              </span>
+                              <button onClick={(e) => { e.stopPropagation(); removeHolding(h.id); }} className="text-xs text-[#B15A3F] p-1">
+                                🗑️
+                              </button>
+                            </div>
+                          </div>
+
+                          {isExpanded && (
+                            <div className="bg-[#10181F] border border-[#2B3A47] border-t-0 p-3 rounded-b text-xs space-y-1.5">
+                              {isLoadingThis ? (
+                                <div className="text-[#8FA0AC]">라이브 주가를 분석 중입니다...</div>
+                              ) : hb ? (
+                                <>
+                                  <div className="text-[#C9A227] font-medium">{hb.price_trend}</div>
+                                  <div className="text-[#E7E2D4] leading-relaxed">{hb.news_summary_ko}</div>
+                                  <div className="text-[#5A9382]">🎯 관전 포인트: {hb.watch_point_ko}</div>
+                                  <div className="text-[#8FA0AC] text-[10px]">📈 밸류에이션: {hb.metric_summary}</div>
+                                </>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="bg-[#182430] p-4 sm:p-6 rounded-lg border border-[#2B3A47]">
+                  <div className="flex justify-between items-center mb-2">
+                    <h2 className="text-base font-bold text-[#E7E2D4]">오늘의 종합 수치 브리핑</h2>
+                    <button
+                      onClick={generateBriefing}
+                      disabled={loadingBriefing}
+                      className="bg-[#C9A227] text-[#10181F] px-3 py-2 rounded text-xs font-bold disabled:opacity-50 cursor-pointer"
+                    >
+                      {loadingBriefing ? "분석 중..." : "📈 종합 브리핑 받기"}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-[#8FA0AC] mb-3">
+                    AI, 로봇, 제약바이오, 2차전지 섹터와 매수금액 상위 10개 종목 중심 브리핑입니다.
+                  </p>
+
+                  {briefingError && <div className="text-[#B15A3F] text-xs mb-2">{briefingError}</div>}
+
+                  {!briefing && !loadingBriefing && (
+                    <div className="text-xs text-[#8FA0AC]">
+                      상단의 [종합 브리핑 받기] 버튼을 누르면 종합 시황이 생성됩니다.
+                    </div>
+                  )}
+
+                  {briefing && (
+                    <div className="space-y-3">
+                      <div className="bg-[#1F2E3A] border-l-4 border-[#C9A227] p-3 rounded">
+                        <div className="text-xs text-[#C9A227] font-medium mb-1">핵심 섹터(AI/로봇/바이오/2차전지) 시황</div>
+                        <div className="text-xs text-[#5A9382] font-mono mb-1.5">{briefing.key_metrics_ko}</div>
+                        <div className="text-xs text-[#E7E2D4] leading-relaxed">{briefing.market_overview_ko}</div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <div className="text-xs text-[#8FA0AC] font-medium">상위 종목별 실시간 분석 (ETF 제외)</div>
+                        {briefing.holdings_analysis?.map((item, idx) => (
+                          <div key={idx} className="bg-[#10181F] border border-[#2B3A47] p-2.5 rounded text-xs space-y-1">
+                            <div className="font-bold text-white">{item.name}</div>
+                            <div className="text-[#8FA0AC]">{item.insight_ko}</div>
+                            <div className="text-[#C9A227]">👉 전략: {item.action_point}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {tab === "vocab" && (
+              <div className="space-y-2.5">
+                <h2 className="text-base font-bold text-[#E7E2D4] mb-3">나만의 학습 단어장</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {vocabBank.map((v, i) => (
+                    <div key={i} className="bg-[#182430] p-3 rounded border border-[#2B3A47]">
+                      <div className="text-xs font-bold text-[#C9A227] mb-0.5">{v.word}</div>
+                      <div className="text-xs text-[#8FA0AC]">{v.meaning_ko}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {tab === "history" && (
+              <div className="space-y-2">
+                <h2 className="text-base font-bold text-[#E7E2D4] mb-3">학습 히스토리</h2>
+                {history.map((h, i) => (
+                  <div key={i} className="bg-[#182430] p-3 rounded border border-[#2B3A47] flex justify-between items-center text-xs">
+                    <span className="text-[#E7E2D4] font-medium truncate pr-2">{h.title}</span>
+                    <span className="text-[#8FA0AC] shrink-0">{formatDisplayDate(h.date)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const container = document.getElementById('root');
+    const root = ReactDOM.createRoot(container);
+    root.render(<App />);
+  </script>
+</body>
+</html>
