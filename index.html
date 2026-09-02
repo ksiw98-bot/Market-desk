@@ -58,7 +58,6 @@
       "셀트리온": "068270"
     };
 
-    // 가벼운 멀티 프록시 시세 수집 엔진
     async function fetchRealTimePrice(symbol, market, name) {
       const cleanName = name ? name.trim() : "";
       let code = symbol ? symbol.replace(/[^0-9]/g, "") : "";
@@ -110,7 +109,6 @@
       return { isSuccess: false };
     }
 
-    // 429 에러 방지용 안전 호출 함수
     async function callLLMForInsight(prompt, apiKey) {
       if (!apiKey) throw new Error("API_KEY_MISSING");
 
@@ -138,14 +136,14 @@
       let response = await doFetch();
 
       if (response.status === 429) {
-        await new Promise(r => setTimeout(r, 3000));
+        await new Promise(r => setTimeout(r, 4000));
         response = await doFetch();
       }
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         if (response.status === 429) {
-          throw new Error("요청 횟수 제한(429)을 초과했습니다. 잠시 후 다시 시도해 주세요.");
+          throw new Error("요청 횟수 제한(429)을 초과했습니다. 잠시 후(약 30초 뒤) 다시 시도해 주세요.");
         }
         throw new Error(`API 오류 (${response.status}): ${errData.error?.message || '인증 실패'}`);
       }
@@ -347,7 +345,7 @@
 
       const holdingKey = (h) => `${h.name}__${h.market}`;
 
-      // 온디맨드(On-demand) 개별 분석 및 메모리 캐싱 적용
+      // 1단계: 접기/펼치기 시 429 에러 방지를 위해 실시간 가격만 먼저 안전하게 조회
       const toggleHoldingBriefing = async (h) => {
         const key = holdingKey(h);
         if (expandedHoldingKey === key) {
@@ -356,23 +354,27 @@
         }
         setExpandedHoldingKey(key);
 
-        // 캐시된 데이터가 있으면 API 재호출 생략
-        if (holdingBriefings[key] && realPrices[key]) {
-          return;
-        }
+        if (realPrices[key]) return;
 
         setLoadingHoldingKey(key);
-
         const realData = await fetchRealTimePrice(h.symbol, h.market, h.name);
         if (realData.isSuccess) {
           setRealPrices(prev => ({ ...prev, [key]: realData }));
         }
+        setLoadingHoldingKey(null);
+      };
 
+      // 2단계: 사용자가 원할 때만 [AI 분석 요청] 버튼을 눌러서 실행 (429 에러 원천 차단)
+      const requestAIInsight = async (h) => {
+        const key = holdingKey(h);
+        setLoadingHoldingKey(key);
+
+        const rp = realPrices[key];
         let priceText = "";
-        if (realData.isSuccess) {
-          const unit = realData.currency === "KRW" ? "원" : "$";
-          const sign = realData.changeRate >= 0 ? "+" : "";
-          priceText = `⚡ 현재가: ${realData.price.toLocaleString()}${unit} (전일대비 ${sign}${realData.changeRate}%)`;
+        if (rp && rp.isSuccess) {
+          const unit = rp.currency === "KRW" ? "원" : "$";
+          const sign = rp.changeRate >= 0 ? "+" : "";
+          priceText = `⚡ 현재가: ${rp.price.toLocaleString()}${unit} (전일대비 ${sign}${rp.changeRate}%)`;
         } else {
           priceText = `평단가 기준 분석: ${h.buyPrice.toLocaleString()}${h.market === 'KR' ? '원' : '$'}`;
         }
@@ -412,7 +414,6 @@ Return raw JSON:
         }
       };
 
-      // 상위 10개 종목만 추려서 브리핑 생성
       const generateBriefing = async () => {
         if (holdings.length === 0) return;
         setBriefingError("");
@@ -719,7 +720,7 @@ Return raw JSON:
 
                             <div className="flex items-center gap-2 shrink-0">
                               <span className="text-xs text-[#C9A227] font-medium">
-                                {isLoadingThis ? "조회 중..." : isExpanded ? "▲ 접기" : "📊 AI 분석"}
+                                {isLoadingThis && !rp ? "가격 조회중..." : isExpanded ? "▲ 접기" : "📊 시세/분석"}
                               </span>
                               <button onClick={(e) => { e.stopPropagation(); removeHolding(h.id); }} className="text-xs text-[#B15A3F] p-1">
                                 🗑️
@@ -729,32 +730,35 @@ Return raw JSON:
 
                           {isExpanded && (
                             <div className="bg-[#10181F] border border-[#2B3A47] border-t-0 p-3 rounded-b text-xs space-y-2">
-                              {isLoadingThis ? (
-                                <div className="text-[#8FA0AC]">실시간 주가 수집 및 AI 기업 재료를 분석 중입니다...</div>
+                              {rp && rp.isSuccess ? (
+                                <div className="bg-[#1F2E3A] p-2.5 rounded border border-[#2B3A47] text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
+                                  <span className="text-white font-bold">⚡ 현재가 {priceText}</span>
+                                  <span className={rp.changeRate >= 0 ? "text-[#E55353]" : "text-[#4A90E2]"}>
+                                    {changeText}
+                                  </span>
+                                  <span className={profitText.includes('+') ? "text-[#E55353] font-medium" : profitText.includes('-') ? "text-[#4A90E2] font-medium" : "text-[#8FA0AC]"}>
+                                    손익 {profitText}
+                                  </span>
+                                </div>
                               ) : (
-                                <>
-                                  {rp && rp.isSuccess ? (
-                                    <div className="bg-[#1F2E3A] p-2.5 rounded border border-[#2B3A47] text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
-                                      <span className="text-white font-bold">⚡ 현재가 {priceText}</span>
-                                      <span className={rp.changeRate >= 0 ? "text-[#E55353]" : "text-[#4A90E2]"}>
-                                        {changeText}
-                                      </span>
-                                      <span className={profitText.includes('+') ? "text-[#E55353] font-medium" : profitText.includes('-') ? "text-[#4A90E2] font-medium" : "text-[#8FA0AC]"}>
-                                        손익 {profitText}
-                                      </span>
-                                    </div>
-                                  ) : (
-                                    <div className="text-[#B15A3F] text-[11px]">시세 수집 지연 (장외 시간 혹은 네트워크 상태 확인)</div>
-                                  )}
+                                <div className="text-[#8FA0AC] text-[11px]">실시간 시세 로딩 중이거나 장외 시간입니다.</div>
+                              )}
 
-                                  {hb && (
-                                    <>
-                                      <div className="text-[#E7E2D4] leading-relaxed pt-1">{hb.news_summary_ko}</div>
-                                      <div className="text-[#5A9382] font-medium">🎯 관전 포인트: {hb.watch_point_ko}</div>
-                                      <div className="text-[#8FA0AC] text-[10px]">📈 핵심 지표: {hb.metric_summary}</div>
-                                    </>
-                                  )}
-                                </>
+                              {/* AI 분석 결과가 없을 때만 명시적 분석 버튼 노출 (429 에러 방지) */}
+                              {!hb ? (
+                                <button
+                                  onClick={() => requestAIInsight(h)}
+                                  disabled={isLoadingThis}
+                                  className="w-full bg-[#1F2E3A] border border-[#C9A227] text-[#C9A227] py-2 rounded text-xs font-bold hover:bg-[#253644] transition-colors disabled:opacity-50"
+                                >
+                                  {isLoadingThis ? "🤖 AI 심층 분석 생성 중..." : "✨ AI 심층 분석 요청하기"}
+                                </button>
+                              ) : (
+                                <div className="space-y-1.5 pt-1 border-t border-[#2B3A47]">
+                                  <div className="text-[#E7E2D4] leading-relaxed">{hb.news_summary_ko}</div>
+                                  <div className="text-[#5A9382] font-medium">🎯 관전 포인트: {hb.watch_point_ko}</div>
+                                  <div className="text-[#8FA0AC] text-[10px]">📈 핵심 지표: {hb.metric_summary}</div>
+                                </div>
                               )}
                             </div>
                           )}
