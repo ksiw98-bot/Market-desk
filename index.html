@@ -58,7 +58,6 @@
       "셀트리온": "068270"
     };
 
-    // 빠른 실시간 주가 파싱 엔진
     async function fetchRealTimePrice(symbol, market, name) {
       const cleanName = name ? name.trim() : "";
       let code = symbol ? symbol.replace(/[^0-9]/g, "") : "";
@@ -124,11 +123,12 @@
       return { isSuccess: false };
     }
 
+    // 최신 표준 Gemini API (gemini-2.5-flash / gemini-2.0-flash 연동)
     async function callLLMForInsight(prompt, apiKey) {
       if (!apiKey) throw new Error("API_KEY_MISSING");
 
       const cleanKey = apiKey.trim();
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${cleanKey}`;
 
       const response = await fetch(url, {
         method: "POST",
@@ -149,8 +149,25 @@
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(`API 오류 (${response.status}): ${errData.error?.message || '인증 실패'}`);
+        // 백업 모델(gemini-2.0-flash) 재시도
+        const backupUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cleanKey}`;
+        const backupRes = await fetch(backupUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: `You are a financial analyst. Return ONLY raw valid JSON matching prompt structure.\n\nPrompt: ${prompt}` }] }],
+            generationConfig: { temperature: 0.2, responseMimeType: "application/json" }
+          })
+        });
+
+        if (!backupRes.ok) {
+          const errData = await backupRes.json().catch(() => ({}));
+          throw new Error(`API 오류 (${backupRes.status}): ${errData.error?.message || '인증 실패'}`);
+        }
+
+        const bData = await backupRes.json();
+        const bText = bData.candidates?.[0]?.content?.parts?.[0]?.text;
+        return JSON.parse(bText.replace(/```json|```/g, "").trim());
       }
 
       const data = await response.json();
@@ -350,7 +367,6 @@
 
       const holdingKey = (h) => `${h.name}__${h.market}`;
 
-      // [핵심 변경] 분석 버튼을 누를 때 시세 및 AI 분석 동시 호출
       const toggleHoldingBriefing = async (h) => {
         const key = holdingKey(h);
         if (expandedHoldingKey === key) {
@@ -360,7 +376,6 @@
         setExpandedHoldingKey(key);
         setLoadingHoldingKey(key);
 
-        // 클릭 시 실시간 시세 조회
         const realData = await fetchRealTimePrice(h.symbol, h.market, h.name);
         if (realData.isSuccess) {
           setRealPrices(prev => ({ ...prev, [key]: realData }));
@@ -577,7 +592,7 @@ Return raw JSON:
               <div className="space-y-4">
                 <div className="bg-[#182430] p-3 rounded-lg border border-[#2B3A47] flex justify-between items-center">
                   <span className="text-xs text-[#8FA0AC] truncate pr-2">
-                    {apiKey ? "✨ Gemini 1.5 Flash 연동 완료" : "💡 Gemini API 키를 등록하면 실시간 브리핑이 활성화됩니다."}
+                    {apiKey ? "✨ Gemini API 연동 완료" : "💡 Gemini API 키를 등록하면 실시간 브리핑이 활성화됩니다."}
                   </span>
                   <button
                     onClick={() => setShowApiInput(!showApiInput)}
@@ -730,7 +745,6 @@ Return raw JSON:
                                 <div className="text-[#8FA0AC]">실시간 주가 수집 및 AI 기업 재료를 분석 중입니다...</div>
                               ) : (
                                 <>
-                                  {/* 실시간 주가/등락/수익 표기 영역 */}
                                   {rp && rp.isSuccess ? (
                                     <div className="bg-[#1F2E3A] p-2.5 rounded border border-[#2B3A47] text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
                                       <span className="text-white font-bold">⚡ 현재가 {priceText}</span>
@@ -745,7 +759,6 @@ Return raw JSON:
                                     <div className="text-[#8FA0AC] italic">장외 시간이거나 주가 조회 실패로 평단가 기준 분석을 제공합니다.</div>
                                   )}
 
-                                  {/* AI 브리핑 내용 */}
                                   {hb && (
                                     <>
                                       <div className="text-[#E7E2D4] leading-relaxed pt-1">{hb.news_summary_ko}</div>
