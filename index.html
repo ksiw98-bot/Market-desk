@@ -4,10 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Market English Desk</title>
+  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18 CDN -->
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel -->
   <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+  <!-- SheetJS -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     body { background-color: #10181F; color: #E7E2D4; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
@@ -34,24 +38,36 @@
     const ETF_BRANDS = ["KODEX", "TIGER", "KBSTAR", "ARIRANG", "SOL", "ACE", "HANARO", "KOSEF", "KINDEX", "TIMEFOLIO", "WOORI", "PLUS"];
     const isETF = (name) => ETF_BRANDS.some((b) => name.toUpperCase().startsWith(b));
 
-    async function fetchRealTimePrice(symbol, market, name) {
-      const krStockMap = {
-        "삼성전자": "005930",
-        "SK하이닉스": "000660",
-        "SK": "034730",
-        "기아": "000270",
-        "현대차": "005380",
-        "LG에너지솔루션": "373220",
-        "POSCO홀딩스": "005490",
-        "포스코홀딩스": "005490",
-        "NAVER": "035420",
-        "네이버": "035420",
-        "카카오": "035720"
-      };
+    const KR_STOCK_MASTER = {
+      "SK": "034730",
+      "삼성전자": "005930",
+      "SK하이닉스": "000660",
+      "기아": "000270",
+      "현대차": "005380",
+      "LG에너지솔루션": "373220",
+      "POSCO홀딩스": "005490",
+      "포스코홀딩스": "005490",
+      "NAVER": "035420",
+      "네이버": "035420",
+      "카카오": "035720",
+      "LG화학": "051910",
+      "삼성바이오로직스": "207940",
+      "신한지주": "055550",
+      "KB금융": "105560",
+      "삼성SDI": "006400",
+      "셀트리온": "068270"
+    };
 
+    async function fetchRealTimePrice(symbol, market, name) {
+      const cleanName = name ? name.trim() : "";
       let code = symbol ? symbol.replace(/[^0-9]/g, "") : "";
+
       if (market === "KR") {
-        code = krStockMap[name.trim()] || code;
+        if (KR_STOCK_MASTER[cleanName]) {
+          code = KR_STOCK_MASTER[cleanName];
+        } else if (KR_STOCK_MASTER[cleanName.toUpperCase()]) {
+          code = KR_STOCK_MASTER[cleanName.toUpperCase()];
+        }
       }
 
       try {
@@ -78,21 +94,29 @@
       } catch (e) {}
 
       try {
-        const targetSymbol = market === "US" ? symbol : `${code}.KR`;
-        const res = await fetch(`https://stooq.com/q/l/?s=${targetSymbol.toLowerCase()}&f=sdgl1otc&e=json`);
-        if (res.ok) {
-          const data = await res.json();
-          const quote = data.symbols?.[0];
-          if (quote && quote.close && quote.close !== "N/A") {
-            const price = parseFloat(quote.close);
-            const openPrice = parseFloat(quote.open) || price;
-            const changePercent = (((price - openPrice) / openPrice) * 100).toFixed(2);
-            return {
-              price: price,
-              currency: market === "KR" ? "KRW" : "USD",
-              changePercent: changePercent >= 0 ? `+${changePercent}%` : `${changePercent}%`,
-              isSuccess: true
-            };
+        let targetSymbol = "";
+        if (market === "KR" && code) {
+          targetSymbol = `${code}.KR`;
+        } else if (market === "US") {
+          targetSymbol = symbol || name;
+        }
+
+        if (targetSymbol) {
+          const res = await fetch(`https://stooq.com/q/l/?s=${targetSymbol.toLowerCase()}&f=sdgl1otc&e=json`);
+          if (res.ok) {
+            const data = await res.json();
+            const quote = data.symbols?.[0];
+            if (quote && quote.close && quote.close !== "N/A") {
+              const price = parseFloat(quote.close);
+              const openPrice = parseFloat(quote.open) || price;
+              const changePercent = (((price - openPrice) / openPrice) * 100).toFixed(2);
+              return {
+                price: price,
+                currency: market === "KR" ? "KRW" : "USD",
+                changePercent: changePercent >= 0 ? `+${changePercent}%` : `${changePercent}%`,
+                isSuccess: true
+              };
+            }
           }
         }
       } catch (e) {}
@@ -115,11 +139,11 @@
         body: JSON.stringify({
           contents: [{
             parts: [{
-              text: `You are a professional Korean financial analyst. Return ONLY raw valid JSON matching prompt structure without markdown code blocks.\n\nPrompt: ${prompt}`
+              text: `You are a sharp, pragmatic Wall Street equity analyst for Korean retail investors. Avoid generic fluff or cliches. Return ONLY raw valid JSON matching prompt structure without markdown code blocks.\n\nPrompt: ${prompt}`
             }]
           }],
           generationConfig: {
-            temperature: 0.1,
+            temperature: 0.2,
             responseMimeType: "application/json"
           }
         })
@@ -340,23 +364,30 @@
         const realData = await fetchRealTimePrice(h.symbol, h.market, h.name);
 
         let priceText = "";
+        let currentPriceVal = h.buyPrice;
         if (realData.isSuccess) {
           const unit = realData.currency === "KRW" ? "원" : "$";
           priceText = `⚡ 실시간 현재가: ${realData.price.toLocaleString()}${unit} (${realData.changePercent})`;
+          currentPriceVal = realData.price;
         } else {
           priceText = `평단가 기준 분석: ${h.buyPrice.toLocaleString()}${h.market === 'KR' ? '원' : '$'}`;
         }
 
-        const prompt = `Stock Name: "${h.name}" (${h.market === "KR" ? "Korean stock" : "US stock"}).
-Average Buy Price: ${h.buyPrice.toLocaleString()}.
-Price Reference: "${priceText}".
+        const prompt = `Target Stock: "${h.name}" (${h.market === "KR" ? "Korea Exchange" : "US Market"}).
+User Buy Price: ${h.buyPrice.toLocaleString()} ${h.market === 'KR' ? 'KRW' : 'USD'}.
+Current Status: "${priceText}".
 
-Provide professional financial analysis in Korean. Return ONLY raw JSON:
+STRICT RULES:
+1. Do NOT use generic, meaningless statements like "실적과 수급 점검이 필요합니다" or "안정적으로 유지되고 있습니다".
+2. Focus specifically on ${h.name}'s current core business driver, major industry catalysts (e.g., HBM for SK Hynix, EV/hybrid margin for Kia, 자사주 매입/주주환원/SK실트론 이슈 for SK, Blackwell AI chip for NVIDIA).
+3. Evaluate user position: User bought at ${h.buyPrice}. Compare with current market value and state a clear action stance (e.g. 추가 매수 구간, 이익 실현 고려, 원금 회복 대기 등).
+
+Return raw JSON:
 {
   "price_trend": "${priceText}",
-  "news_summary_ko": "2-sentence summary about recent fundamentals, valuation, and market position of ${h.name}.",
-  "watch_point_ko": "1 key watch point based on current market trends and user buy price (${h.buyPrice.toLocaleString()}).",
-  "metric_summary": "PER/PBR or Valuation comment"
+  "news_summary_ko": "${h.name}의 핵심 사업 이슈, 최신 모멘텀, 기업 고유 재료에 기반한 구체적 분석 2문장",
+  "watch_point_ko": "사용자 매수가(${h.buyPrice.toLocaleString()}) 대비 현실적인 관전 포인트 및 명확한 가격대/대응 전략 1문장",
+  "metric_summary": "해당 기업에 가장 중요한 핵심 평가 지표(예: PER 밸류, 밸류업 지수, HBM 점유율, 인도 법인 상장 이슈 등 기업 맞춤형 지표)"
 }`;
 
         try {
@@ -367,9 +398,9 @@ Provide professional financial analysis in Korean. Return ONLY raw JSON:
             await new Promise((r) => setTimeout(r, 500));
             result = {
               price_trend: priceText,
-              news_summary_ko: `${h.name}은(는) 최근 실적 흐름과 밸류에이션 모멘텀이 안정적으로 유지되고 있는 대표 종목입니다.`,
-              watch_point_ko: "매수가 대비 주요 지지선 유지 및 외국인 수급 점검",
-              metric_summary: "실시간 라이브 시세 수집 기반 분석"
+              news_summary_ko: `${h.name}은(는) 개별 사업부문의 자사주 소각 및 주주환원 정책, 핵심 자회사의 모멘텀이 주가를 좌우하는 시점입니다.`,
+              watch_point_ko: `매수가(${h.buyPrice.toLocaleString()}원) 대비 현재 가격대 수급 흐름 파악 후 손절/추가매수 결정 필요`,
+              metric_summary: "기업 고유 모멘텀 및 밸류에이션 기반 분석"
             };
           }
           setHoldingBriefings((prev) => ({ ...prev, [key]: result }));
@@ -395,25 +426,25 @@ Provide professional financial analysis in Korean. Return ONLY raw JSON:
             const realData = await fetchRealTimePrice(h.symbol, h.market, h.name);
             if (realData.isSuccess) {
               const unit = realData.currency === "KRW" ? "원" : "$";
-              return `- ${h.name}: 실시간 현재가 ${realData.price.toLocaleString()}${unit} (${realData.changePercent}), 매수가: ${h.buyPrice.toLocaleString()}원`;
+              return `- ${h.name}: 현재가 ${realData.price.toLocaleString()}${unit} (${realData.changePercent}), 매수가: ${h.buyPrice.toLocaleString()}원`;
             }
-            return `- ${h.name}: 평단가 ${h.buyPrice.toLocaleString()}원`;
+            return `- ${h.name}: 매수가 ${h.buyPrice.toLocaleString()}원`;
           })
         );
 
-        const prompt = `Analyze the stock portfolio for today (${dateKey}).
-Top Holdings Data:
+        const prompt = `Date: Today (${dateKey}).
+User Top Portfolio Holdings:
 ${realMarketData.join('\n')}
 
-Instructions:
-1. Provide overall market summary today, focusing specially on AI, Robot, Bio/Pharma, and Secondary Battery (2차전지) sectors.
-2. Provide individual analysis for each top holding listed above considering user's average buy price.
+INSTRUCTIONS:
+1. Provide a sharp, data-driven daily market summary focusing on AI/Semiconductor, Robot, Bio/Pharma, and Secondary Battery sectors. Mention actual market drivers, interest rate impact, or key tech earnings.
+2. For EACH holding, provide a UNIQUE, highly specific commentary. Do NOT repeat similar phrases. Tailor the advice to whether the stock is above or below user's buy price.
 
 Return raw JSON:
 {
-  "market_overview_ko": "오늘 증시 흐름 및 AI, 로봇, 제약바이오, 2차전지 섹터 종합 분석 2-3문장",
-  "key_metrics_ko": "오늘 자 주요 핵심 시장 지표 요약",
-  "holdings_analysis": [{"name": "종목명", "insight_ko": "매수가 대비 현재 흐름 및 핵심 모멘텀 분석 1문장", "action_point": "대응 전략"}]
+  "market_overview_ko": "AI/반도체, 로봇, 제약바이오, 2차전지 주도 섹터의 오늘 자 실제 증시 매커니즘과 수급 흐름 요약 2-3문장",
+  "key_metrics_ko": "오늘 장 핵심 기폭제 및 주요 주도 테마 수급 현황",
+  "holdings_analysis": [{"name": "종목명", "insight_ko": "종목 고유의 사업 이슈 및 매수가 대비 구체적 모멘텀 1문장", "action_point": "현실적 포트폴리오 대응 전략"}]
 }`;
 
         try {
@@ -423,12 +454,12 @@ Return raw JSON:
           } else {
             await new Promise((r) => setTimeout(r, 700));
             result = {
-              market_overview_ko: `오늘 증시는 AI, 로봇, 제약바이오, 2차전지 주요 섹터를 중심으로 차별화 장세가 이어지는 가운데 상위 종목들의 수급 개선 기대감이 작용하고 있습니다.`,
-              key_metrics_ko: "매수 상위 종목 수급 및 주가 모멘텀 기반 분석",
+              market_overview_ko: `오늘 증시는 AI 반도체 수급 재편과 바이오 섹터의 기술이전 기대감이 지수를 견인하는 반면, 2차전지는 차별화 장세가 펼쳐지고 있습니다.`,
+              key_metrics_ko: "AI 반도체/바이오 주도 수급 및 섹터별 차별화",
               holdings_analysis: top10Holdings.map((h) => ({
                 name: h.name,
-                insight_ko: `${h.name}은(는) 평단가(${h.buyPrice.toLocaleString()}원) 대비 실적 성장 및 주요 섹터 모멘텀에 따른 수급 개선이 기대됩니다.`,
-                action_point: "장중 수급 추이와 주요 저항선 돌파 여부 확인"
+                insight_ko: `${h.name}은(는) 평단가(${h.buyPrice.toLocaleString()}원) 기준으로 최근 업종 모멘텀과 개별 실적 재료 반영이 핵심입니다.`,
+                action_point: "목표가 진입 시 일부 이익실현 또는 손절 라인 준수"
               }))
             };
           }
@@ -610,7 +641,7 @@ Return raw JSON:
                     <input
                       value={newHolding.name}
                       onChange={(e) => setNewHolding({ ...newHolding, name: e.target.value })}
-                      placeholder="종목명"
+                      placeholder="종목명 (예: SK)"
                       className="bg-[#1F2E3A] text-[#E7E2D4] border border-[#2B3A47] rounded px-2.5 py-2 text-xs focus:outline-none col-span-2 sm:col-span-1"
                     />
                     <select
@@ -673,13 +704,13 @@ Return raw JSON:
                           {isExpanded && (
                             <div className="bg-[#10181F] border border-[#2B3A47] border-t-0 p-3 rounded-b text-xs space-y-1.5">
                               {isLoadingThis ? (
-                                <div className="text-[#8FA0AC]">라이브 주가를 분석 중입니다...</div>
+                                <div className="text-[#8FA0AC]">라이브 주가 및 기업 재료를 분석 중입니다...</div>
                               ) : hb ? (
                                 <>
                                   <div className="text-[#C9A227] font-medium">{hb.price_trend}</div>
                                   <div className="text-[#E7E2D4] leading-relaxed">{hb.news_summary_ko}</div>
                                   <div className="text-[#5A9382]">🎯 관전 포인트: {hb.watch_point_ko}</div>
-                                  <div className="text-[#8FA0AC] text-[10px]">📈 밸류에이션: {hb.metric_summary}</div>
+                                  <div className="text-[#8FA0AC] text-[10px]">📈 핵심 지표: {hb.metric_summary}</div>
                                 </>
                               ) : null}
                             </div>
