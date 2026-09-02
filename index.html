@@ -58,7 +58,7 @@
       "셀트리온": "068270"
     };
 
-    // 실시간 주가 파싱 다중 백엔드 엔진
+    // 빠른 실시간 주가 파싱 엔진
     async function fetchRealTimePrice(symbol, market, name) {
       const cleanName = name ? name.trim() : "";
       let code = symbol ? symbol.replace(/[^0-9]/g, "") : "";
@@ -71,11 +71,14 @@
         }
       }
 
-      // 1시도: 네이버 금융 다이렉트 프록시 파싱
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+
       try {
         if (market === "KR" && code) {
           const targetUrl = `https://polling.finance.naver.com/api/realtime/domestic/stock/${code}`;
-          const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`);
+          const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, { signal: controller.signal });
+          clearTimeout(timeoutId);
           if (res.ok) {
             const wrapper = await res.json();
             const data = JSON.parse(wrapper.contents);
@@ -96,7 +99,6 @@
         }
       } catch (e) {}
 
-      // 2시도: Stooq 글로벌 시세 파싱 (미국 및 한국 공통 백업)
       try {
         let targetSymbol = market === "US" ? (symbol || name) : `${code}.KR`;
         const res = await fetch(`https://stooq.com/q/l/?s=${targetSymbol.toLowerCase()}&f=sdgl1otc&e=json`);
@@ -122,7 +124,6 @@
       return { isSuccess: false };
     }
 
-    // Gemini 1.5 Flash 안정화 API 연동
     async function callLLMForInsight(prompt, apiKey) {
       if (!apiKey) throw new Error("API_KEY_MISSING");
 
@@ -200,18 +201,7 @@
       useEffect(() => {
         const savedKey = localStorage.getItem("user_gemini_api_key");
         if (savedKey) setApiKey(savedKey);
-        fetchAllPrices(holdings);
       }, []);
-
-      const fetchAllPrices = async (list) => {
-        for (const h of list) {
-          const key = `${h.name}__${h.market}`;
-          const res = await fetchRealTimePrice(h.symbol, h.market, h.name);
-          if (res.isSuccess) {
-            setRealPrices(prev => ({ ...prev, [key]: res }));
-          }
-        }
-      };
 
       const saveKey = (key) => {
         const trimmed = key.trim();
@@ -329,9 +319,7 @@
 
           if (parsed.length === 0) throw new Error("유효 종목 없음");
 
-          const newList = [...holdings, ...parsed];
-          setHoldings(newList);
-          fetchAllPrices(newList);
+          setHoldings([...holdings, ...parsed]);
           setUploadMessage(`${parsed.length}개 종목 추가 완료${etfCount > 0 ? ` (ETF ${etfCount}개 제외됨)` : ''}`);
         } catch (err) {
           setUploadError(err.message || "엑셀 읽기 실패");
@@ -352,9 +340,7 @@
           buyPrice: parseFloat(newHolding.buyPrice),
           quantity: parseFloat(newHolding.quantity),
         };
-        const newList = [...holdings, holding];
-        setHoldings(newList);
-        fetchAllPrices(newList);
+        setHoldings([...holdings, holding]);
         setNewHolding({ name: "", symbol: "", market: "KR", buyPrice: "", quantity: "" });
       };
 
@@ -364,6 +350,7 @@
 
       const holdingKey = (h) => `${h.name}__${h.market}`;
 
+      // [핵심 변경] 분석 버튼을 누를 때 시세 및 AI 분석 동시 호출
       const toggleHoldingBriefing = async (h) => {
         const key = holdingKey(h);
         if (expandedHoldingKey === key) {
@@ -373,7 +360,8 @@
         setExpandedHoldingKey(key);
         setLoadingHoldingKey(key);
 
-        const realData = realPrices[key] || await fetchRealTimePrice(h.symbol, h.market, h.name);
+        // 클릭 시 실시간 시세 조회
+        const realData = await fetchRealTimePrice(h.symbol, h.market, h.name);
         if (realData.isSuccess) {
           setRealPrices(prev => ({ ...prev, [key]: realData }));
         }
@@ -397,7 +385,6 @@ INSTRUCTIONS FOR GEMINI:
 
 Return raw JSON:
 {
-  "price_trend": "${priceText}",
   "news_summary_ko": "Specific 2-sentence summary of ${h.name}'s current core catalysts in Korean.",
   "watch_point_ko": "Actionable advice considering user buy price (${h.buyPrice.toLocaleString()}).",
   "metric_summary": "Custom core valuation metric for ${h.name}"
@@ -410,7 +397,6 @@ Return raw JSON:
           } else {
             await new Promise((r) => setTimeout(r, 400));
             result = {
-              price_trend: priceText,
               news_summary_ko: `${h.name}의 사업 부문별 실적 추이 및 핵심 재료 반영이 주가를 좌우하고 있습니다.`,
               watch_point_ko: `매수가(${h.buyPrice.toLocaleString()}) 대비 주요 지원 라인 대응 고려`,
               metric_summary: "기업 고유 밸류에이션 지표"
@@ -720,31 +706,17 @@ Return raw JSON:
                             }`}
                           >
                             <div className="min-w-0 flex-1 pr-2">
-                              <div className="flex items-center gap-2 mb-1">
+                              <div className="flex items-center gap-2">
                                 <span className="text-sm font-bold text-white truncate">{h.name}</span>
                                 <span className="text-[11px] text-[#8FA0AC]">
                                   평단 {h.buyPrice.toLocaleString()}{unit} · {h.quantity}주
                                 </span>
                               </div>
-
-                              {rp && rp.isSuccess ? (
-                                <div className="text-xs flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                                  <span className="text-white font-bold">현재가 {priceText}</span>
-                                  <span className={rp.changeRate >= 0 ? "text-[#E55353]" : "text-[#4A90E2]"}>
-                                    {changeText}
-                                  </span>
-                                  <span className={profitText.includes('+') ? "text-[#E55353] font-medium" : profitText.includes('-') ? "text-[#4A90E2] font-medium" : "text-[#8FA0AC]"}>
-                                    손익 {profitText}
-                                  </span>
-                                </div>
-                              ) : (
-                                <div className="text-xs text-[#8FA0AC]">라이브 주가 로딩 중...</div>
-                              )}
                             </div>
 
                             <div className="flex items-center gap-2 shrink-0">
                               <span className="text-xs text-[#C9A227] font-medium">
-                                {isLoadingThis ? "분석 중..." : isExpanded ? "▲ 접기" : "📊 AI 분석"}
+                                {isLoadingThis ? "조회 중..." : isExpanded ? "▲ 접기" : "📊 AI 분석"}
                               </span>
                               <button onClick={(e) => { e.stopPropagation(); removeHolding(h.id); }} className="text-xs text-[#B15A3F] p-1">
                                 🗑️
@@ -755,14 +727,34 @@ Return raw JSON:
                           {isExpanded && (
                             <div className="bg-[#10181F] border border-[#2B3A47] border-t-0 p-3 rounded-b text-xs space-y-2">
                               {isLoadingThis ? (
-                                <div className="text-[#8FA0AC]">기업 핵심 재료와 주가를 분석 중입니다...</div>
-                              ) : hb ? (
+                                <div className="text-[#8FA0AC]">실시간 주가 수집 및 AI 기업 재료를 분석 중입니다...</div>
+                              ) : (
                                 <>
-                                  <div className="text-[#E7E2D4] leading-relaxed">{hb.news_summary_ko}</div>
-                                  <div className="text-[#5A9382] font-medium">🎯 관전 포인트: {hb.watch_point_ko}</div>
-                                  <div className="text-[#8FA0AC] text-[10px]">📈 핵심 지표: {hb.metric_summary}</div>
+                                  {/* 실시간 주가/등락/수익 표기 영역 */}
+                                  {rp && rp.isSuccess ? (
+                                    <div className="bg-[#1F2E3A] p-2.5 rounded border border-[#2B3A47] text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
+                                      <span className="text-white font-bold">⚡ 현재가 {priceText}</span>
+                                      <span className={rp.changeRate >= 0 ? "text-[#E55353]" : "text-[#4A90E2]"}>
+                                        {changeText}
+                                      </span>
+                                      <span className={profitText.includes('+') ? "text-[#E55353] font-medium" : profitText.includes('-') ? "text-[#4A90E2] font-medium" : "text-[#8FA0AC]"}>
+                                        손익 {profitText}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div className="text-[#8FA0AC] italic">장외 시간이거나 주가 조회 실패로 평단가 기준 분석을 제공합니다.</div>
+                                  )}
+
+                                  {/* AI 브리핑 내용 */}
+                                  {hb && (
+                                    <>
+                                      <div className="text-[#E7E2D4] leading-relaxed pt-1">{hb.news_summary_ko}</div>
+                                      <div className="text-[#5A9382] font-medium">🎯 관전 포인트: {hb.watch_point_ko}</div>
+                                      <div className="text-[#8FA0AC] text-[10px]">📈 핵심 지표: {hb.metric_summary}</div>
+                                    </>
+                                  )}
                                 </>
-                              ) : null}
+                              )}
                             </div>
                           )}
                         </div>
