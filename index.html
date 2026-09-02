@@ -58,6 +58,7 @@
       "셀트리온": "068270"
     };
 
+    // 장외시간/휴일에도 최근 종가를 확실하게 파싱하는 엔진
     async function fetchRealTimePrice(symbol, market, name) {
       const cleanName = name ? name.trim() : "";
       let code = symbol ? symbol.replace(/[^0-9]/g, "") : "";
@@ -70,34 +71,36 @@
         }
       }
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
-
+      // 1시도: 네이버 웹 API 다이렉트 및 파싱 구문 완화
       try {
         if (market === "KR" && code) {
           const targetUrl = `https://polling.finance.naver.com/api/realtime/domestic/stock/${code}`;
-          const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, { signal: controller.signal });
-          clearTimeout(timeoutId);
+          const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`);
           if (res.ok) {
             const wrapper = await res.json();
-            const data = JSON.parse(wrapper.contents);
-            const item = data.datas?.[0];
-            if (item && item.closePrice) {
-              const price = parseInt(item.closePrice.replace(/,/g, ""), 10);
-              const changeVal = parseInt((item.compareToPreviousClosePrice || "0").replace(/,/g, ""), 10);
-              const changeRate = parseFloat(item.compareToPreviousClosePriceRate);
-              return {
-                price,
-                changeVal,
-                changeRate,
-                currency: "KRW",
-                isSuccess: true
-              };
+            const data = typeof wrapper.contents === 'string' ? JSON.parse(wrapper.contents) : wrapper.contents;
+            const item = data.datas?.[0] || data.result?.areas?.[0]?.datas?.[0];
+            
+            if (item) {
+              const rawPrice = item.closePrice || item.nowVal || item.nv;
+              if (rawPrice) {
+                const price = parseInt(String(rawPrice).replace(/,/g, ""), 10);
+                const changeVal = parseInt(String(item.compareToPreviousClosePrice || item.cv || "0").replace(/,/g, ""), 10);
+                const changeRate = parseFloat(item.compareToPreviousClosePriceRate || item.cr || "0");
+                return {
+                  price,
+                  changeVal,
+                  changeRate,
+                  currency: "KRW",
+                  isSuccess: true
+                };
+              }
             }
           }
         }
       } catch (e) {}
 
+      // 2시도: Stooq 글로벌 데이터 백업 파싱 (장외시간에도 종가 수집)
       try {
         let targetSymbol = market === "US" ? (symbol || name) : `${code}.KR`;
         const res = await fetch(`https://stooq.com/q/l/?s=${targetSymbol.toLowerCase()}&f=sdgl1otc&e=json`);
@@ -123,7 +126,6 @@
       return { isSuccess: false };
     }
 
-    // gemini-3.6-flash 모델 호환 API 연동
     async function callLLMForInsight(prompt, apiKey) {
       if (!apiKey) throw new Error("API_KEY_MISSING");
 
@@ -368,7 +370,7 @@
         if (realData.isSuccess) {
           const unit = realData.currency === "KRW" ? "원" : "$";
           const sign = realData.changeRate >= 0 ? "+" : "";
-          priceText = `⚡ 현재가: ${realData.price.toLocaleString()}${unit} (전일대비 ${sign}${realData.changeRate}%)`;
+          priceText = `⚡ 최근종가: ${realData.price.toLocaleString()}${unit} (전일대비 ${sign}${realData.changeRate}%)`;
         } else {
           priceText = `평단가 기준 분석: ${h.buyPrice.toLocaleString()}${h.market === 'KR' ? '원' : '$'}`;
         }
@@ -425,7 +427,7 @@ Return raw JSON:
             if (realData.isSuccess) {
               const unit = realData.currency === "KRW" ? "원" : "$";
               const sign = realData.changeRate >= 0 ? "+" : "";
-              return `- ${h.name}: 현재가 ${realData.price.toLocaleString()}${unit} (${sign}${realData.changeRate}%), 매수가: ${h.buyPrice.toLocaleString()}원`;
+              return `- ${h.name}: 최근종가 ${realData.price.toLocaleString()}${unit} (${sign}${realData.changeRate}%), 매수가: ${h.buyPrice.toLocaleString()}원`;
             }
             return `- ${h.name}: 매수가 ${h.buyPrice.toLocaleString()}원`;
           })
@@ -725,12 +727,12 @@ Return raw JSON:
                           {isExpanded && (
                             <div className="bg-[#10181F] border border-[#2B3A47] border-t-0 p-3 rounded-b text-xs space-y-2">
                               {isLoadingThis ? (
-                                <div className="text-[#8FA0AC]">실시간 주가 수집 및 AI 기업 재료를 분석 중입니다...</div>
+                                <div className="text-[#8FA0AC]">주가 수집 및 AI 기업 재료를 분석 중입니다...</div>
                               ) : (
                                 <>
                                   {rp && rp.isSuccess ? (
                                     <div className="bg-[#1F2E3A] p-2.5 rounded border border-[#2B3A47] text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
-                                      <span className="text-white font-bold">⚡ 현재가 {priceText}</span>
+                                      <span className="text-white font-bold">⚡ 최근 종가 {priceText}</span>
                                       <span className={rp.changeRate >= 0 ? "text-[#E55353]" : "text-[#4A90E2]"}>
                                         {changeText}
                                       </span>
@@ -738,9 +740,7 @@ Return raw JSON:
                                         손익 {profitText}
                                       </span>
                                     </div>
-                                  ) : (
-                                    <div className="text-[#8FA0AC] italic">장외 시간이거나 주가 조회 실패로 평단가 기준 분석을 제공합니다.</div>
-                                  )}
+                                  ) : null}
 
                                   {hb && (
                                     <>
