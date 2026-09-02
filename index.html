@@ -58,7 +58,7 @@
       "셀트리온": "068270"
     };
 
-    // 멀티 프록시를 경유하는 안정적인 단건 시세 수집 엔진
+    // 가벼운 멀티 프록시 시세 수집 엔진
     async function fetchRealTimePrice(symbol, market, name) {
       const cleanName = name ? name.trim() : "";
       let code = symbol ? symbol.replace(/[^0-9]/g, "") : "";
@@ -92,24 +92,6 @@
       } catch (e) {}
 
       try {
-        if (market === "KR" && code) {
-          const targetUrl = `https://polling.finance.naver.com/api/realtime/domestic/stock/${code}`;
-          const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`);
-          if (res.ok) {
-            const wrapper = await res.json();
-            const data = typeof wrapper.contents === 'string' ? JSON.parse(wrapper.contents) : wrapper.contents;
-            const item = data.datas?.[0];
-            if (item && item.closePrice) {
-              const price = parseInt(item.closePrice.replace(/,/g, ""), 10);
-              const changeVal = parseInt((item.compareToPreviousClosePrice || "0").replace(/,/g, ""), 10);
-              const changeRate = parseFloat(item.compareToPreviousClosePriceRate);
-              return { price, changeVal, changeRate, currency: "KRW", isSuccess: true };
-            }
-          }
-        }
-      } catch (e) {}
-
-      try {
         let targetSymbol = market === "US" ? (symbol || name) : `${code}.KR`;
         const res = await fetch(`https://stooq.com/q/l/?s=${targetSymbol.toLowerCase()}&f=sdgl1otc&e=json`);
         if (res.ok) {
@@ -128,30 +110,43 @@
       return { isSuccess: false };
     }
 
+    // 429 에러 방지용 안전 호출 함수
     async function callLLMForInsight(prompt, apiKey) {
       if (!apiKey) throw new Error("API_KEY_MISSING");
 
       const cleanKey = apiKey.trim();
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${cleanKey}`;
 
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: `You are a professional Wall Street financial analyst for Korean investors. Return ONLY raw valid JSON matching prompt structure without markdown code blocks.\n\nPrompt: ${prompt}`
-            }]
-          }],
-          generationConfig: {
-            temperature: 0.2,
-            responseMimeType: "application/json"
-          }
-        })
-      });
+      const doFetch = async () => {
+        return await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{
+              parts: [{
+                text: `You are a professional Wall Street financial analyst for Korean investors. Return ONLY raw valid JSON matching prompt structure without markdown code blocks.\n\nPrompt: ${prompt}`
+              }]
+            }],
+            generationConfig: {
+              temperature: 0.2,
+              responseMimeType: "application/json"
+            }
+          })
+        });
+      };
+
+      let response = await doFetch();
+
+      if (response.status === 429) {
+        await new Promise(r => setTimeout(r, 3000));
+        response = await doFetch();
+      }
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
+        if (response.status === 429) {
+          throw new Error("요청 횟수 제한(429)을 초과했습니다. 잠시 후 다시 시도해 주세요.");
+        }
         throw new Error(`API 오류 (${response.status}): ${errData.error?.message || '인증 실패'}`);
       }
 
@@ -352,7 +347,7 @@
 
       const holdingKey = (h) => `${h.name}__${h.market}`;
 
-      // [핵심 최적화] 분석 버튼을 누를 때 해당 종목만 온디맨드(On-demand)로 가격 및 AI 분석 호출 + 캐싱 적용
+      // 온디맨드(On-demand) 개별 분석 및 메모리 캐싱 적용
       const toggleHoldingBriefing = async (h) => {
         const key = holdingKey(h);
         if (expandedHoldingKey === key) {
@@ -361,7 +356,7 @@
         }
         setExpandedHoldingKey(key);
 
-        // 이미 캐시된 데이터가 있다면 추가 API 요청 없이 즉시 표시
+        // 캐시된 데이터가 있으면 API 재호출 생략
         if (holdingBriefings[key] && realPrices[key]) {
           return;
         }
@@ -417,7 +412,7 @@ Return raw JSON:
         }
       };
 
-      // 80여 개 종목 중 투자 금액 상위 10개만 추려서 종합 브리핑 생성
+      // 상위 10개 종목만 추려서 브리핑 생성
       const generateBriefing = async () => {
         if (holdings.length === 0) return;
         setBriefingError("");
