@@ -58,7 +58,7 @@
       "셀트리온": "068270"
     };
 
-    // 장외시간/휴일에도 최근 종가를 확실하게 파싱하는 엔진
+    // 멀티 CORS 프록시를 경유하는 강력한 실시간 시세 수집 엔진
     async function fetchRealTimePrice(symbol, market, name) {
       const cleanName = name ? name.trim() : "";
       let code = symbol ? symbol.replace(/[^0-9]/g, "") : "";
@@ -71,7 +71,28 @@
         }
       }
 
-      // 1시도: 네이버 웹 API 다이렉트 및 파싱 구문 완화
+      // 1시도: corsproxy.io 경유 네이버 금융 API 호출
+      try {
+        if (market === "KR" && code) {
+          const targetUrl = `https://polling.finance.naver.com/api/realtime/domestic/stock/${code}`;
+          const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`);
+          if (res.ok) {
+            const data = await res.json();
+            const item = data.datas?.[0] || data.result?.areas?.[0]?.datas?.[0];
+            if (item) {
+              const rawPrice = item.closePrice || item.nowVal || item.nv;
+              if (rawPrice) {
+                const price = parseInt(String(rawPrice).replace(/,/g, ""), 10);
+                const changeVal = parseInt(String(item.compareToPreviousClosePrice || item.cv || "0").replace(/,/g, ""), 10);
+                const changeRate = parseFloat(item.compareToPreviousClosePriceRate || item.cr || "0");
+                return { price, changeVal, changeRate, currency: "KRW", isSuccess: true };
+              }
+            }
+          }
+        }
+      } catch (e) {}
+
+      // 2시도: allorigins 백업 경유
       try {
         if (market === "KR" && code) {
           const targetUrl = `https://polling.finance.naver.com/api/realtime/domestic/stock/${code}`;
@@ -79,28 +100,18 @@
           if (res.ok) {
             const wrapper = await res.json();
             const data = typeof wrapper.contents === 'string' ? JSON.parse(wrapper.contents) : wrapper.contents;
-            const item = data.datas?.[0] || data.result?.areas?.[0]?.datas?.[0];
-            
-            if (item) {
-              const rawPrice = item.closePrice || item.nowVal || item.nv;
-              if (rawPrice) {
-                const price = parseInt(String(rawPrice).replace(/,/g, ""), 10);
-                const changeVal = parseInt(String(item.compareToPreviousClosePrice || item.cv || "0").replace(/,/g, ""), 10);
-                const changeRate = parseFloat(item.compareToPreviousClosePriceRate || item.cr || "0");
-                return {
-                  price,
-                  changeVal,
-                  changeRate,
-                  currency: "KRW",
-                  isSuccess: true
-                };
-              }
+            const item = data.datas?.[0];
+            if (item && item.closePrice) {
+              const price = parseInt(item.closePrice.replace(/,/g, ""), 10);
+              const changeVal = parseInt((item.compareToPreviousClosePrice || "0").replace(/,/g, ""), 10);
+              const changeRate = parseFloat(item.compareToPreviousClosePriceRate);
+              return { price, changeVal, changeRate, currency: "KRW", isSuccess: true };
             }
           }
         }
       } catch (e) {}
 
-      // 2시도: Stooq 글로벌 데이터 백업 파싱 (장외시간에도 종가 수집)
+      // 3시도: Stooq 글로벌 및 국내 백업 시세
       try {
         let targetSymbol = market === "US" ? (symbol || name) : `${code}.KR`;
         const res = await fetch(`https://stooq.com/q/l/?s=${targetSymbol.toLowerCase()}&f=sdgl1otc&e=json`);
@@ -112,13 +123,7 @@
             const openPrice = parseFloat(quote.open) || price;
             const changeVal = price - openPrice;
             const changeRate = parseFloat((((price - openPrice) / openPrice) * 100).toFixed(2));
-            return {
-              price,
-              changeVal,
-              changeRate,
-              currency: market === "KR" ? "KRW" : "USD",
-              isSuccess: true
-            };
+            return { price, changeVal, changeRate, currency: market === "KR" ? "KRW" : "USD", isSuccess: true };
           }
         }
       } catch (e) {}
@@ -134,9 +139,7 @@
 
       const response = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{
             parts: [{
@@ -370,7 +373,7 @@
         if (realData.isSuccess) {
           const unit = realData.currency === "KRW" ? "원" : "$";
           const sign = realData.changeRate >= 0 ? "+" : "";
-          priceText = `⚡ 최근종가: ${realData.price.toLocaleString()}${unit} (전일대비 ${sign}${realData.changeRate}%)`;
+          priceText = `⚡ 현재가: ${realData.price.toLocaleString()}${unit} (전일대비 ${sign}${realData.changeRate}%)`;
         } else {
           priceText = `평단가 기준 분석: ${h.buyPrice.toLocaleString()}${h.market === 'KR' ? '원' : '$'}`;
         }
@@ -427,7 +430,7 @@ Return raw JSON:
             if (realData.isSuccess) {
               const unit = realData.currency === "KRW" ? "원" : "$";
               const sign = realData.changeRate >= 0 ? "+" : "";
-              return `- ${h.name}: 최근종가 ${realData.price.toLocaleString()}${unit} (${sign}${realData.changeRate}%), 매수가: ${h.buyPrice.toLocaleString()}원`;
+              return `- ${h.name}: 현재가 ${realData.price.toLocaleString()}${unit} (${sign}${realData.changeRate}%), 매수가: ${h.buyPrice.toLocaleString()}원`;
             }
             return `- ${h.name}: 매수가 ${h.buyPrice.toLocaleString()}원`;
           })
@@ -727,12 +730,12 @@ Return raw JSON:
                           {isExpanded && (
                             <div className="bg-[#10181F] border border-[#2B3A47] border-t-0 p-3 rounded-b text-xs space-y-2">
                               {isLoadingThis ? (
-                                <div className="text-[#8FA0AC]">주가 수집 및 AI 기업 재료를 분석 중입니다...</div>
+                                <div className="text-[#8FA0AC]">실시간 주가 수집 및 AI 기업 재료를 분석 중입니다...</div>
                               ) : (
                                 <>
                                   {rp && rp.isSuccess ? (
                                     <div className="bg-[#1F2E3A] p-2.5 rounded border border-[#2B3A47] text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
-                                      <span className="text-white font-bold">⚡ 최근 종가 {priceText}</span>
+                                      <span className="text-white font-bold">⚡ 실시간가 {priceText}</span>
                                       <span className={rp.changeRate >= 0 ? "text-[#E55353]" : "text-[#4A90E2]"}>
                                         {changeText}
                                       </span>
@@ -740,7 +743,9 @@ Return raw JSON:
                                         손익 {profitText}
                                       </span>
                                     </div>
-                                  ) : null}
+                                  ) : (
+                                    <div className="text-[#B15A3F] text-[11px]">시세 수집 중계 서버 지연 (잠시 후 다시 시도해 주세요)</div>
+                                  )}
 
                                   {hb && (
                                     <>
